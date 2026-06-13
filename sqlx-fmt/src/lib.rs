@@ -5,38 +5,79 @@ pub mod syntax;
 pub const QUERY: &str = "query";
 pub const QUERY_AS: &str = "query_as";
 
-pub enum Mode {
-    Check,
-    Format,
+/// What to do with the formatted output, mirroring rustfmt's emit modes.
+#[derive(Clone, Copy)]
+pub enum Emit {
+    /// Overwrite each input file in place (rustfmt default).
+    Files,
+    /// Print the formatted file to stdout.
+    Stdout,
+    /// Print a diff and never write; used by `--check`.
+    Diff,
 }
 
-pub fn run(path: &Path, mode: Mode, verbose: bool) {
-    let src = std::fs::read_to_string(path).unwrap();
+/// Output/behaviour switches shared across all files in one invocation.
+pub struct Options {
+    pub backup: bool,
+    pub color: bool,
+    pub files_with_diff: bool,
+    pub verbose: bool,
+    pub quiet: bool,
+}
 
-    let mut edits = syntax::get_edits(&src);
+/// Formats a single file according to `emit`. Returns `true` if the file was
+/// **not** already correctly formatted (i.e. formatting changed something).
+pub fn run(path: &Path, emit: Emit, opts: &Options) -> bool {
+    if opts.verbose {
+        eprintln!("Formatting {}", path.display());
+    }
+
+    let src = std::fs::read_to_string(path).unwrap();
+    let formatted_src = format_str(&src);
+    let changed = src != formatted_src;
+
+    match emit {
+        Emit::Stdout => print!("{formatted_src}"),
+        Emit::Diff => {
+            if changed {
+                if opts.files_with_diff {
+                    println!("{}", path.display());
+                } else if !opts.quiet {
+                    print_diff(&src, &formatted_src, opts.color);
+                }
+            }
+        }
+        Emit::Files => {
+            if changed {
+                if opts.backup {
+                    let mut backup = path.as_os_str().to_owned();
+                    backup.push(".bk");
+                    std::fs::copy(path, backup).unwrap();
+                }
+                write_atomic(path, &formatted_src).unwrap();
+                if opts.files_with_diff && !opts.quiet {
+                    println!("{}", path.display());
+                }
+            }
+        }
+    }
+
+    changed
+}
+
+/// Applies every SQL edit to `src` and returns the reformatted source.
+fn format_str(src: &str) -> String {
+    let mut edits = syntax::get_edits(src);
 
     // Apply edits from the end of the file backwards so earlier byte offsets
     // stay valid as we mutate the string.
     edits.sort_by_key(|&Edit { start, .. }| std::cmp::Reverse(start));
 
-    let mut formatted_src = src.clone();
+    let mut formatted_src = src.to_string();
     for edit in edits {
         formatted_src.replace_range(edit.start..edit.end, &edit.replacement);
     }
-
-    if src != formatted_src {
-        if verbose {
-            print_diff(&src, &formatted_src);
-        }
-        match mode {
-            Mode::Check => {
-                std::process::exit(1);
-            }
-            Mode::Format => {
-                write_atomic(path, &formatted_src).unwrap();
-            }
-        }
-    }
+    formatted_src
 }
 
 /// Writes `contents` to `path` atomically: write to a temp file in the same
@@ -60,18 +101,23 @@ fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// Prints a colored, line-level unified diff between two versions of the file.
-fn print_diff(original: &str, formatted: &str) {
+/// Prints a line-level unified diff between two versions of the file,
+/// optionally colored.
+fn print_diff(original: &str, formatted: &str, color: bool) {
     use similar::{ChangeTag, TextDiff};
 
     let diff = TextDiff::from_lines(original, formatted);
     for change in diff.iter_all_changes() {
-        let (sign, color) = match change.tag() {
+        let (sign, ansi) = match change.tag() {
             ChangeTag::Delete => ("-", "\x1b[31m"), // red
             ChangeTag::Insert => ("+", "\x1b[32m"), // green
             ChangeTag::Equal => (" ", "\x1b[2m"),   // dim
         };
-        print!("{color}{sign}{change}\x1b[0m");
+        if color {
+            print!("{ansi}{sign}{change}\x1b[0m");
+        } else {
+            print!("{sign}{change}");
+        }
     }
 }
 
