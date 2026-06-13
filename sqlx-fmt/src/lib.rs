@@ -1,5 +1,6 @@
 use std::path::Path;
 
+pub mod cli;
 mod format;
 mod io;
 mod syntax;

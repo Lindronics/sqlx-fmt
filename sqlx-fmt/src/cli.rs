@@ -1,12 +1,14 @@
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use sqlx_fmt::{Emit, Options, fmt_file};
+
+use crate::{Emit, Options, fmt_file};
 
 /// Format the SQL inside sqlx `query!` / `query_as!` macros.
 #[derive(Parser)]
 #[command(version, about)]
-struct Args {
+pub struct Args {
     /// Files to format.
     #[arg(required = true)]
     files: Vec<PathBuf>,
@@ -84,9 +86,9 @@ impl From<&Args> for Options {
     }
 }
 
-fn main() {
-    let args = Args::parse();
-
+/// Formats every requested file, returning a process exit code. In check mode,
+/// a file that needs reformatting yields a failure code.
+pub fn run(args: Args) -> ExitCode {
     let opts = Options::from(&args);
 
     let mut needs_formatting = false;
@@ -94,8 +96,9 @@ fn main() {
         needs_formatting |= fmt_file(path, &opts);
     }
 
-    // In check mode, a required reformat is a failure (exit 1).
     if matches!(opts.emit, Emit::Diff) && needs_formatting {
-        std::process::exit(1);
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
 }
