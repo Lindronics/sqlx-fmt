@@ -9,49 +9,49 @@ use crate::{Emit, Options, fmt_file};
 #[derive(Parser)]
 #[command(version, about)]
 pub struct Args {
-    /// Files to format.
-    #[arg(required = true)]
-    files: Vec<PathBuf>,
+    /// Files to format. When run as `cargo sqlx-fmt` with no files given, every
+    /// Rust file in the surrounding cargo workspace is formatted.
+    pub files: Vec<PathBuf>,
 
     /// Run in 'check' mode. Exits with 0 if input is formatted correctly.
     /// Exits with 1 and prints a diff if formatting is required.
     #[arg(long)]
-    check: bool,
+    pub check: bool,
 
     /// What data to emit and how.
     #[arg(long, default_value = "files")]
-    emit: EmitArg,
+    pub emit: EmitArg,
 
     /// Backup any modified files.
     #[arg(long)]
-    backup: bool,
+    pub backup: bool,
 
     /// Use colored output (if supported).
     #[arg(long, default_value = "auto")]
-    color: ColorArg,
+    pub color: ColorArg,
 
     /// Prints the names of mismatched files that were formatted. Prints the
     /// names of files that would be formatted when used with `--check` mode.
     #[arg(short = 'l', long = "files-with-diff")]
-    files_with_diff: bool,
+    pub files_with_diff: bool,
 
     /// Print verbose output.
     #[arg(short, long)]
-    verbose: bool,
+    pub verbose: bool,
 
     /// Print less output.
     #[arg(short, long)]
-    quiet: bool,
+    pub quiet: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum EmitArg {
+pub enum EmitArg {
     Files,
     Stdout,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum ColorArg {
+pub enum ColorArg {
     Always,
     Never,
     Auto,
@@ -89,6 +89,11 @@ impl From<&Args> for Options {
 /// Formats every requested file, returning a process exit code. In check mode,
 /// a file that needs reformatting yields a failure code.
 pub fn run(args: Args) -> ExitCode {
+    if args.files.is_empty() {
+        eprintln!("error: no files to format");
+        return ExitCode::FAILURE;
+    }
+
     let opts = Options::from(&args);
 
     let mut needs_formatting = false;
