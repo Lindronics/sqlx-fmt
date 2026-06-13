@@ -1,0 +1,4 @@
+# Used in CI via `cargo nextest run --profile ci`.
+# Writes a JUnit report to target/nextest/ci/junit.xml for reporting to GitHub.
+[profile.ci.junit]
+path = "junit.xml"
