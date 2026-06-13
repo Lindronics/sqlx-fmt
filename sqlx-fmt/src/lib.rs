@@ -101,3 +101,78 @@ fn print_diff(original: &str, formatted: &str, color: bool) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(emit: Emit) -> Options {
+        Options {
+            backup: false,
+            color: false,
+            files_with_diff: false,
+            verbose: false,
+            quiet: true,
+            emit,
+        }
+    }
+
+    #[test]
+    fn fmt_str_leaves_already_formatted_source_untouched() {
+        // A file with no query macros is never changed.
+        let src = "fn main() {\n    let x = 1;\n}\n";
+        assert_eq!(fmt_str(src), src);
+    }
+
+    #[test]
+    fn fmt_str_is_idempotent() {
+        let src = r#"fn f() { let _ = sqlx::query!("select id from t where id=1"); }"#;
+        let once = fmt_str(src);
+        assert_ne!(once, src, "expected formatting to change the source");
+        assert_eq!(fmt_str(&once), once, "second pass should be a no-op");
+    }
+
+    #[test]
+    fn fmt_str_rewrites_only_the_sql_keeping_surrounding_code() {
+        let src = r#"fn f() { let _ = query!("select 1", bind_arg); }"#;
+        let out = fmt_str(src);
+        // Surrounding tokens (binding arg, trailing punctuation) are preserved.
+        assert!(out.starts_with("fn f() { let _ = query!("), "got: {out}");
+        assert!(out.ends_with(", bind_arg); }"), "got: {out}");
+        assert!(out.contains("SELECT"), "got: {out}");
+    }
+
+    #[test]
+    fn fmt_file_files_mode_writes_changes_and_reports_changed() {
+        let path = std::env::temp_dir().join(format!("sqlx-fmt-lib-{}.rs", std::process::id()));
+        std::fs::write(&path, r#"fn f() { let _ = query!("select 1"); }"#).unwrap();
+
+        let changed = fmt_file(&path, &opts(Emit::Files));
+
+        assert!(changed);
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("SELECT"), "file not rewritten: {written}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn fmt_file_diff_mode_does_not_modify_the_file() {
+        let path =
+            std::env::temp_dir().join(format!("sqlx-fmt-lib-diff-{}.rs", std::process::id()));
+        let original = r#"fn f() { let _ = query!("select 1"); }"#;
+        std::fs::write(&path, original).unwrap();
+
+        let changed = fmt_file(&path, &opts(Emit::Diff));
+
+        assert!(
+            changed,
+            "check mode should report the file needs formatting"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "diff/check mode must never write"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+}
