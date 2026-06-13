@@ -67,10 +67,9 @@ pub fn get_edits(src: &str) -> Vec<Edit> {
 
         let range = sql_expr.span().byte_range();
         let indent = line_indent(src, range.start);
-        edits.push(Edit {
-            range,
-            replacement: to_raw_string_literal(formatted.trim_end(), indent),
-        });
+        let replacement = to_raw_string_literal(formatted.trim_end(), indent);
+
+        edits.push(Edit { range, replacement });
     }
 
     edits
