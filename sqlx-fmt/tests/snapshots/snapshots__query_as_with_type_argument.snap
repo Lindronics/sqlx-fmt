@@ -1,0 +1,12 @@
+---
+source: sqlx-fmt/tests/snapshots.rs
+expression: "fmt(r#\"fn f() { let _ = query_as!(User, \"select * from users where active = true\"); }\"#)"
+---
+fn f() { let _ = query_as!(User, r#"
+SELECT
+    *
+FROM
+    users
+WHERE
+    active = TRUE
+"#); }

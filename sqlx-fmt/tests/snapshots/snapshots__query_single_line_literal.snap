@@ -1,0 +1,13 @@
+---
+source: sqlx-fmt/tests/snapshots.rs
+expression: "fmt(r#\"fn f() { let _ = sqlx::query!(\"select id, name from users where id = $1\", id); }\"#)"
+---
+fn f() { let _ = sqlx::query!(r#"
+SELECT
+    id,
+    name
+FROM
+    users
+WHERE
+    id = $1
+"#, id); }

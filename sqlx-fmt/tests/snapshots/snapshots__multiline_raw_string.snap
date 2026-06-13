@@ -1,0 +1,15 @@
+---
+source: sqlx-fmt/tests/snapshots.rs
+expression: "fmt(\"fn f() {\\n    let _ = query!(r#\\\"select id, name\\n        from users\\n        where active\\\"#);\\n}\\n\")"
+---
+fn f() {
+    let _ = query!(r#"
+    SELECT
+        id,
+        name
+    FROM
+        users
+    WHERE
+        active
+    "#);
+}

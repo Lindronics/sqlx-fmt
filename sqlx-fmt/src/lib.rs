@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::format::SqlFormatter;
 
 pub mod cli;
-mod format;
+pub mod format;
 mod io;
 mod syntax;
 

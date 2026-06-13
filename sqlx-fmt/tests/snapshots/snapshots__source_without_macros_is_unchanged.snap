@@ -1,0 +1,7 @@
+---
+source: sqlx-fmt/tests/snapshots.rs
+expression: fmt(src)
+---
+fn main() {
+    let x = 1;
+}

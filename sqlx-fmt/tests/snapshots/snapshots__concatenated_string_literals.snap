@@ -1,0 +1,12 @@
+---
+source: sqlx-fmt/tests/snapshots.rs
+expression: "fmt(r#\"fn f() { let _ = query!(\"select id \" + \"from users \" + \"where id = $1\", id); }\"#)"
+---
+fn f() { let _ = query!(r#"
+SELECT
+    id
+FROM
+    users
+WHERE
+    id = $1
+"#, id); }
