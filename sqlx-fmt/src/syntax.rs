@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use syn::{
     Expr, Token,
     punctuated::Punctuated,
@@ -8,9 +10,8 @@ use syn::{
 use crate::{QUERY, QUERY_AS, format};
 
 pub struct Edit {
-    pub start: usize,
-    pub end: usize,
-    pub new: String,
+    pub range: Range<usize>,
+    pub replacement: String,
 }
 
 /// Collects every `query!` / `query_as!` macro invocation in a parsed file.
@@ -64,13 +65,11 @@ pub fn get_edits(src: &str) -> Vec<Edit> {
 
         let formatted = format::format_sql(&sql);
 
-        let start = line_col_to_offset(src, sql_expr.span().start());
-        let end = line_col_to_offset(src, sql_expr.span().end());
-        let indent = line_indent(src, start);
+        let range = sql_expr.span().byte_range();
+        let indent = line_indent(src, range.start);
         edits.push(Edit {
-            start,
-            end,
-            new: to_raw_string_literal(formatted.trim_end(), indent),
+            range,
+            replacement: to_raw_string_literal(formatted.trim_end(), indent),
         });
     }
 
@@ -110,26 +109,6 @@ fn line_indent(src: &str, offset: usize) -> &str {
         .take_while(|&b| b == b' ' || b == b'\t')
         .count();
     &src[line_start..line_start + indent_len]
-}
-
-/// Converts a proc-macro2 line/column (1-based line, 0-based char column) into
-/// a byte offset into `src`.
-fn line_col_to_offset(src: &str, lc: proc_macro2::LineColumn) -> usize {
-    let mut offset = 0;
-    for (i, line) in src.split_inclusive('\n').enumerate() {
-        if i + 1 == lc.line {
-            // Walk char boundaries; `lc.column` may point one past the last
-            // char (end of a token), so fall back to the line's byte length.
-            return offset
-                + line
-                    .char_indices()
-                    .map(|(b, _)| b)
-                    .nth(lc.column)
-                    .unwrap_or(line.trim_end_matches('\n').len());
-        }
-        offset += line.len();
-    }
-    offset
 }
 
 // Folds an expression made of string literals joined by `+` into a single

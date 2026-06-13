@@ -75,11 +75,11 @@ pub fn fmt_str(src: &str) -> String {
 
     // Apply edits from the end of the file backwards so earlier byte offsets
     // stay valid as we mutate the string.
-    edits.sort_by_key(|&syntax::Edit { start, .. }| std::cmp::Reverse(start));
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
 
     let mut formatted_src = src.to_string();
-    for syntax::Edit { start, end, new } in edits {
-        formatted_src.replace_range(start..end, &new);
+    for syntax::Edit { range, replacement } in edits {
+        formatted_src.replace_range(range, &replacement);
     }
     formatted_src
 }
