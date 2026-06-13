@@ -5,21 +5,21 @@ use syn::{
     visit::{self, Visit},
 };
 
-use crate::{Edit, QUERY, QUERY_AS};
+use crate::{QUERY, QUERY_AS, format};
+
+pub struct Edit {
+    pub start: usize,
+    pub end: usize,
+    pub new: String,
+}
 
 /// Collects every `query!` / `query_as!` macro invocation in a parsed file.
-///
-/// We visit *all* `syn::Macro` nodes rather than just top-level items, because
-/// these macros are used in expression position and can appear arbitrarily deep
-/// inside function bodies, closures, match arms, etc.
-pub struct QueryMacroVisitor<'ast> {
+struct QueryMacroVisitor<'ast> {
     pub macros: Vec<&'ast syn::Macro>,
 }
 
 impl<'ast> Visit<'ast> for QueryMacroVisitor<'ast> {
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        // Match on the final path segment so we catch both the bare `query!`
-        // and the fully-qualified `sqlx::query!` forms.
         if let Some(segment) = mac.path.segments.last()
             && matches!(segment.ident.to_string().as_str(), QUERY | QUERY_AS)
         {
@@ -37,11 +37,7 @@ pub fn get_edits(src: &str) -> Vec<Edit> {
     let mut visitor = QueryMacroVisitor { macros: Vec::new() };
     visitor.visit_file(&file);
 
-    // Each edit replaces the source span of one SQL argument with a freshly
-    // formatted raw-string literal. We collect them all, then splice them into
-    // the source to build the rewritten file.
     let mut edits: Vec<Edit> = Vec::new();
-
     for mac in &visitor.macros {
         let name = mac.path.segments.last().unwrap().ident.to_string();
 
@@ -66,42 +62,19 @@ pub fn get_edits(src: &str) -> Vec<Edit> {
             continue;
         };
 
-        let formatted = format_sql(&sql);
+        let formatted = format::format_sql(&sql);
+
         let start = line_col_to_offset(src, sql_expr.span().start());
         let end = line_col_to_offset(src, sql_expr.span().end());
         let indent = line_indent(src, start);
         edits.push(Edit {
             start,
             end,
-            replacement: to_raw_string_literal(formatted.trim_end(), indent),
+            new: to_raw_string_literal(formatted.trim_end(), indent),
         });
     }
 
     edits
-}
-
-/// Runs `pg_format` over a SQL string, feeding it on stdin and returning the
-/// reformatted output.
-fn format_sql(sql: &str) -> String {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
-    let mut child = Command::new("pg_format")
-        .arg("-") // read from stdin
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn pg_format — is pgFormatter installed?");
-
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(sql.as_bytes())
-        .unwrap();
-
-    let output = child.wait_with_output().unwrap();
-    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 /// Wraps SQL in a Rust raw-string literal, picking enough `#` hashes that the

@@ -1,9 +1,27 @@
 use std::path::Path;
 
-pub mod syntax;
+mod format;
+mod io;
+mod syntax;
 
 pub const QUERY: &str = "query";
 pub const QUERY_AS: &str = "query_as";
+
+/// File formatting options.
+pub struct Options {
+    /// Back up files before formatting in place.
+    pub backup: bool,
+    /// Use ANSI colours for output.
+    pub color: bool,
+    /// Print names of files requiring formatting.
+    pub files_with_diff: bool,
+    /// Print more information.
+    pub verbose: bool,
+    /// Print less information.
+    pub quiet: bool,
+    /// Emit mode.
+    pub emit: Emit,
+}
 
 /// What to do with the formatted output, mirroring rustfmt's emit modes.
 #[derive(Clone, Copy)]
@@ -16,93 +34,56 @@ pub enum Emit {
     Diff,
 }
 
-/// Output/behaviour switches shared across all files in one invocation.
-pub struct Options {
-    pub backup: bool,
-    pub color: bool,
-    pub files_with_diff: bool,
-    pub verbose: bool,
-    pub quiet: bool,
-}
-
 /// Formats a single file according to `emit`. Returns `true` if the file was
 /// **not** already correctly formatted (i.e. formatting changed something).
-pub fn run(path: &Path, emit: Emit, opts: &Options) -> bool {
+pub fn fmt_file(path: &Path, opts: &Options) -> bool {
     if opts.verbose {
         eprintln!("Formatting {}", path.display());
     }
 
     let src = std::fs::read_to_string(path).unwrap();
-    let formatted_src = format_str(&src);
-    let changed = src != formatted_src;
+    let formatted_src = fmt_str(&src);
+    let is_changed = src != formatted_src;
 
-    match emit {
-        Emit::Stdout => print!("{formatted_src}"),
-        Emit::Diff => {
-            if changed {
-                if opts.files_with_diff {
-                    println!("{}", path.display());
-                } else if !opts.quiet {
-                    print_diff(&src, &formatted_src, opts.color);
-                }
+    match (opts.emit, is_changed) {
+        (Emit::Stdout, _) => print!("{formatted_src}"),
+        (Emit::Diff, true) => {
+            if opts.files_with_diff {
+                println!("{}", path.display());
+            } else if !opts.quiet {
+                print_diff(&src, &formatted_src, opts.color);
             }
         }
-        Emit::Files => {
-            if changed {
-                if opts.backup {
-                    let mut backup = path.as_os_str().to_owned();
-                    backup.push(".bk");
-                    std::fs::copy(path, backup).unwrap();
-                }
-                write_atomic(path, &formatted_src).unwrap();
-                if opts.files_with_diff && !opts.quiet {
-                    println!("{}", path.display());
-                }
+        (Emit::Files, true) => {
+            if opts.backup {
+                io::backup_file(path).unwrap();
+            }
+            io::write_atomic(path, &formatted_src).unwrap();
+            if opts.files_with_diff && !opts.quiet {
+                println!("{}", path.display());
             }
         }
+        _ => {}
     }
 
-    changed
+    is_changed
 }
 
-/// Applies every SQL edit to `src` and returns the reformatted source.
-fn format_str(src: &str) -> String {
+/// Format `str`, returning the formatted source.
+pub fn fmt_str(src: &str) -> String {
     let mut edits = syntax::get_edits(src);
 
     // Apply edits from the end of the file backwards so earlier byte offsets
     // stay valid as we mutate the string.
-    edits.sort_by_key(|&Edit { start, .. }| std::cmp::Reverse(start));
+    edits.sort_by_key(|&syntax::Edit { start, .. }| std::cmp::Reverse(start));
 
     let mut formatted_src = src.to_string();
-    for edit in edits {
-        formatted_src.replace_range(edit.start..edit.end, &edit.replacement);
+    for syntax::Edit { start, end, new } in edits {
+        formatted_src.replace_range(start..end, &new);
     }
     formatted_src
 }
 
-/// Writes `contents` to `path` atomically: write to a temp file in the same
-/// directory, then rename over the target. The rename is atomic on a single
-/// filesystem, so a crash mid-write can't truncate or corrupt the original.
-fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
-    let dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-
-    // Keep the temp file in the same directory so the rename stays on one
-    // filesystem (cross-device renames fail and aren't atomic).
-    let tmp = dir.join(format!(".{file_name}.{}.tmp", std::process::id()));
-
-    if let Err(e) = std::fs::write(&tmp, contents) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    std::fs::rename(&tmp, path)
-}
-
-/// Prints a line-level unified diff between two versions of the file,
-/// optionally colored.
 fn print_diff(original: &str, formatted: &str, color: bool) {
     use similar::{ChangeTag, TextDiff};
 
@@ -119,10 +100,4 @@ fn print_diff(original: &str, formatted: &str, color: bool) {
             print!("{sign}{change}");
         }
     }
-}
-
-pub struct Edit {
-    start: usize,
-    end: usize,
-    replacement: String,
 }

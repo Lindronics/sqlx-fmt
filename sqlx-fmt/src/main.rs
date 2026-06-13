@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-use sqlx_fmt::{Emit, Options, run};
+use sqlx_fmt::{Emit, Options, fmt_file};
 
 /// Format the SQL inside sqlx `query!` / `query_as!` macros.
 #[derive(Parser)]
@@ -17,7 +17,7 @@ struct Args {
     check: bool,
 
     /// What data to emit and how.
-    #[arg(long, value_name = "files|stdout", default_value = "files")]
+    #[arg(long, default_value = "files")]
     emit: EmitArg,
 
     /// Backup any modified files.
@@ -25,7 +25,7 @@ struct Args {
     backup: bool,
 
     /// Use colored output (if supported).
-    #[arg(long, value_name = "always|never|auto", default_value = "auto")]
+    #[arg(long, default_value = "auto")]
     color: ColorArg,
 
     /// Prints the names of mismatched files that were formatted. Prints the
@@ -55,40 +55,47 @@ enum ColorArg {
     Auto,
 }
 
+impl From<&Args> for Options {
+    fn from(args: &Args) -> Self {
+        // `--check` overrides `--emit`, mirroring rustfmt.
+        let emit = if args.check {
+            Emit::Diff
+        } else {
+            match args.emit {
+                EmitArg::Files => Emit::Files,
+                EmitArg::Stdout => Emit::Stdout,
+            }
+        };
+
+        let color = match args.color {
+            ColorArg::Always => true,
+            ColorArg::Never => false,
+            ColorArg::Auto => std::io::IsTerminal::is_terminal(&std::io::stdout()),
+        };
+
+        Options {
+            backup: args.backup,
+            color,
+            files_with_diff: args.files_with_diff,
+            verbose: args.verbose,
+            quiet: args.quiet,
+            emit,
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
-    // `--check` overrides `--emit`, mirroring rustfmt.
-    let emit = if args.check {
-        Emit::Diff
-    } else {
-        match args.emit {
-            EmitArg::Files => Emit::Files,
-            EmitArg::Stdout => Emit::Stdout,
-        }
-    };
-
-    let color = match args.color {
-        ColorArg::Always => true,
-        ColorArg::Never => false,
-        ColorArg::Auto => std::io::IsTerminal::is_terminal(&std::io::stdout()),
-    };
-
-    let opts = Options {
-        backup: args.backup,
-        color,
-        files_with_diff: args.files_with_diff,
-        verbose: args.verbose,
-        quiet: args.quiet,
-    };
+    let opts = Options::from(&args);
 
     let mut needs_formatting = false;
     for path in &args.files {
-        needs_formatting |= run(path, emit, &opts);
+        needs_formatting |= fmt_file(path, &opts);
     }
 
     // In check mode, a required reformat is a failure (exit 1).
-    if matches!(emit, Emit::Diff) && needs_formatting {
+    if matches!(opts.emit, Emit::Diff) && needs_formatting {
         std::process::exit(1);
     }
 }
