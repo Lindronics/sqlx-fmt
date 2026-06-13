@@ -9,9 +9,16 @@ use syn::{
 
 use crate::{QUERY, QUERY_AS, format};
 
+/// An edit that can be applied to a given string.
 pub struct Edit {
     pub range: Range<usize>,
     pub replacement: String,
+}
+
+/// A SQL string literal located in the source.
+struct EditTarget {
+    range: Range<usize>,
+    sql: String,
 }
 
 /// Collects every `query!` / `query_as!` macro invocation in a parsed file.
@@ -32,13 +39,18 @@ impl<'ast> Visit<'ast> for QueryMacroVisitor<'ast> {
     }
 }
 
-pub fn get_edits(src: &str) -> Vec<Edit> {
+/// Finds the SQL string argument of every `query!` / `query_as!` invocation,
+/// returning its source byte range and statically-concatenated contents.
+///
+/// This is the pure, `pg_format`-free half of [`get_edits`]: it does all the
+/// macro detection and argument extraction so it can be unit tested on its own.
+fn sql_targets(src: &str) -> Vec<EditTarget> {
     let file = syn::parse_file(src).unwrap();
 
     let mut visitor = QueryMacroVisitor { macros: Vec::new() };
     visitor.visit_file(&file);
 
-    let mut edits: Vec<Edit> = Vec::new();
+    let mut targets = Vec::new();
     for mac in &visitor.macros {
         let name = mac.path.segments.last().unwrap().ident.to_string();
 
@@ -63,16 +75,25 @@ pub fn get_edits(src: &str) -> Vec<Edit> {
             continue;
         };
 
-        let formatted = format::format_sql(&sql);
-
-        let range = sql_expr.span().byte_range();
-        let indent = line_indent(src, range.start);
-        let replacement = to_raw_string_literal(formatted.trim_end(), indent);
-
-        edits.push(Edit { range, replacement });
+        targets.push(EditTarget {
+            range: sql_expr.span().byte_range(),
+            sql,
+        });
     }
 
-    edits
+    targets
+}
+
+pub fn get_edits(src: &str) -> Vec<Edit> {
+    sql_targets(src)
+        .into_iter()
+        .map(|EditTarget { range, sql }| {
+            let formatted = format::format_sql(&sql);
+            let indent = line_indent(src, range.start);
+            let replacement = to_raw_string_literal(formatted.trim_end(), indent);
+            Edit { range, replacement }
+        })
+        .collect()
 }
 
 /// Wraps SQL in a Rust raw-string literal, picking enough `#` hashes that the
@@ -110,7 +131,7 @@ fn line_indent(src: &str, offset: usize) -> &str {
     &src[line_start..line_start + indent_len]
 }
 
-// Folds an expression made of string literals joined by `+` into a single
+/// Folds an expression made of string literals joined by `+` into a single
 /// string, e.g. `"SELECT " + "* FROM users"` -> `SELECT * FROM users`.
 ///
 /// Returns `None` if any leaf isn't a string literal (e.g. a `format!` or a
