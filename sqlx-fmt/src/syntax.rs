@@ -7,7 +7,7 @@ use syn::{
     visit::{self, Visit},
 };
 
-use crate::{QUERY, QUERY_AS, format};
+use crate::{QUERY, QUERY_AS};
 
 /// An edit that can be applied to a given string.
 pub struct Edit {
@@ -16,9 +16,9 @@ pub struct Edit {
 }
 
 /// A SQL string literal located in the source.
-struct EditTarget {
-    range: Range<usize>,
-    sql: String,
+pub struct EditTarget {
+    pub range: Range<usize>,
+    pub sql: String,
 }
 
 /// Collects every `query!` / `query_as!` macro invocation in a parsed file.
@@ -44,7 +44,7 @@ impl<'ast> Visit<'ast> for QueryMacroVisitor<'ast> {
 ///
 /// This is the pure, `pg_format`-free half of [`get_edits`]: it does all the
 /// macro detection and argument extraction so it can be unit tested on its own.
-fn sql_targets(src: &str) -> Vec<EditTarget> {
+pub fn sql_targets(src: &str) -> Vec<EditTarget> {
     let file = syn::parse_file(src).unwrap();
 
     let mut visitor = QueryMacroVisitor { macros: Vec::new() };
@@ -84,25 +84,13 @@ fn sql_targets(src: &str) -> Vec<EditTarget> {
     targets
 }
 
-pub fn get_edits(src: &str) -> Vec<Edit> {
-    sql_targets(src)
-        .into_iter()
-        .map(|EditTarget { range, sql }| {
-            let formatted = format::format_sql(&sql);
-            let indent = line_indent(src, range.start);
-            let replacement = to_raw_string_literal(formatted.trim_end(), indent);
-            Edit { range, replacement }
-        })
-        .collect()
-}
-
 /// Wraps SQL in a Rust raw-string literal, picking enough `#` hashes that the
 /// content can't prematurely terminate the literal.
 ///
 /// Single-line SQL stays inline (`r#"SELECT 1"#`). Multiline SQL always opens
 /// with a newline and indents every line — plus the closing delimiter — by
 /// `indent`, so it nests cleanly inside the surrounding code.
-fn to_raw_string_literal(sql: &str, indent: &str) -> String {
+pub fn to_raw_string_literal(sql: &str, indent: &str) -> String {
     let mut hashes = String::from("#");
     while sql.contains(&format!("\"{hashes}")) {
         hashes.push('#');
@@ -122,7 +110,7 @@ fn to_raw_string_literal(sql: &str, indent: &str) -> String {
 
 /// Returns the leading whitespace of the line containing `offset`, used as the
 /// base indentation for a reformatted SQL block.
-fn line_indent(src: &str, offset: usize) -> &str {
+pub fn line_indent(src: &str, offset: usize) -> &str {
     let line_start = src[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
     let indent_len = src[line_start..]
         .bytes()

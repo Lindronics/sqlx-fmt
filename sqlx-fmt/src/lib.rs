@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::format::SqlFormatter;
+
 pub mod cli;
 mod format;
 mod io;
@@ -37,13 +39,13 @@ pub enum Emit {
 
 /// Formats a single file according to `emit`. Returns `true` if the file was
 /// **not** already correctly formatted (i.e. formatting changed something).
-pub fn fmt_file(path: &Path, opts: &Options) -> bool {
+pub fn fmt_file(fmt: &dyn SqlFormatter, path: &Path, opts: &Options) -> bool {
     if opts.verbose {
         eprintln!("Formatting {}", path.display());
     }
 
     let src = std::fs::read_to_string(path).unwrap();
-    let formatted_src = fmt_str(&src);
+    let formatted_src = fmt_str(fmt, &src);
     let is_changed = src != formatted_src;
 
     match (opts.emit, is_changed) {
@@ -71,8 +73,16 @@ pub fn fmt_file(path: &Path, opts: &Options) -> bool {
 }
 
 /// Format `str`, returning the formatted source.
-pub fn fmt_str(src: &str) -> String {
-    let mut edits = syntax::get_edits(src);
+pub fn fmt_str(fmt: &dyn SqlFormatter, src: &str) -> String {
+    let mut edits = syntax::sql_targets(src)
+        .into_iter()
+        .map(|syntax::EditTarget { range, sql }| {
+            let formatted = fmt.format_sql(&sql);
+            let indent = syntax::line_indent(src, range.start);
+            let replacement = syntax::to_raw_string_literal(formatted.trim_end(), indent);
+            syntax::Edit { range, replacement }
+        })
+        .collect::<Vec<_>>();
 
     // Apply edits from the end of the file backwards so earlier byte offsets
     // stay valid as we mutate the string.
@@ -106,6 +116,19 @@ fn print_diff(original: &str, formatted: &str, color: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::SqlFormatter;
+
+    /// The fixed SQL every macro is rewritten to, regardless of input. Lets the
+    /// tests assert on rewriting behaviour without depending on `pg_format`.
+    const FIXED_SQL: &str = "FORMATTED SQL";
+
+    struct MockFormatter;
+
+    impl SqlFormatter for MockFormatter {
+        fn format_sql(&self, _sql: &str) -> String {
+            FIXED_SQL.to_string()
+        }
+    }
 
     fn opts(emit: Emit) -> Options {
         Options {
@@ -122,25 +145,30 @@ mod tests {
     fn fmt_str_leaves_already_formatted_source_untouched() {
         // A file with no query macros is never changed.
         let src = "fn main() {\n    let x = 1;\n}\n";
-        assert_eq!(fmt_str(src), src);
+        assert_eq!(fmt_str(&MockFormatter, src), src);
     }
 
     #[test]
     fn fmt_str_is_idempotent() {
         let src = r#"fn f() { let _ = sqlx::query!("select id from t where id=1"); }"#;
-        let once = fmt_str(src);
+        let once = fmt_str(&MockFormatter, src);
         assert_ne!(once, src, "expected formatting to change the source");
-        assert_eq!(fmt_str(&once), once, "second pass should be a no-op");
+        assert_eq!(
+            fmt_str(&MockFormatter, &once),
+            once,
+            "second pass should be a no-op"
+        );
     }
 
     #[test]
     fn fmt_str_rewrites_only_the_sql_keeping_surrounding_code() {
         let src = r#"fn f() { let _ = query!("select 1", bind_arg); }"#;
-        let out = fmt_str(src);
-        // Surrounding tokens (binding arg, trailing punctuation) are preserved.
+        let out = fmt_str(&MockFormatter, src);
+        // Surrounding tokens (binding arg, trailing punctuation) are preserved,
+        // and only the SQL literal is swapped for the formatter's output.
         assert!(out.starts_with("fn f() { let _ = query!("), "got: {out}");
         assert!(out.ends_with(", bind_arg); }"), "got: {out}");
-        assert!(out.contains("SELECT"), "got: {out}");
+        assert!(out.contains(FIXED_SQL), "got: {out}");
     }
 
     #[test]
@@ -148,11 +176,11 @@ mod tests {
         let path = std::env::temp_dir().join(format!("sqlx-fmt-lib-{}.rs", std::process::id()));
         std::fs::write(&path, r#"fn f() { let _ = query!("select 1"); }"#).unwrap();
 
-        let changed = fmt_file(&path, &opts(Emit::Files));
+        let changed = fmt_file(&MockFormatter, &path, &opts(Emit::Files));
 
         assert!(changed);
         let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("SELECT"), "file not rewritten: {written}");
+        assert!(written.contains(FIXED_SQL), "file not rewritten: {written}");
         let _ = std::fs::remove_file(&path);
     }
 
@@ -163,7 +191,7 @@ mod tests {
         let original = r#"fn f() { let _ = query!("select 1"); }"#;
         std::fs::write(&path, original).unwrap();
 
-        let changed = fmt_file(&path, &opts(Emit::Diff));
+        let changed = fmt_file(&MockFormatter, &path, &opts(Emit::Diff));
 
         assert!(
             changed,

@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
 
-use crate::{Emit, Options, fmt_file};
+use crate::{Emit, Options, fmt_file, format::PgFormat};
 
 /// Format the SQL inside sqlx `query!` / `query_as!` macros.
 #[derive(Parser)]
@@ -42,6 +42,10 @@ pub struct Args {
     /// Print less output.
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Arguments to pass to inner SQL formatter.
+    #[arg(long)]
+    pub extra_args: Vec<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -57,35 +61,6 @@ pub enum ColorArg {
     Auto,
 }
 
-impl From<&Args> for Options {
-    fn from(args: &Args) -> Self {
-        // `--check` overrides `--emit`, mirroring rustfmt.
-        let emit = if args.check {
-            Emit::Diff
-        } else {
-            match args.emit {
-                EmitArg::Files => Emit::Files,
-                EmitArg::Stdout => Emit::Stdout,
-            }
-        };
-
-        let color = match args.color {
-            ColorArg::Always => true,
-            ColorArg::Never => false,
-            ColorArg::Auto => std::io::IsTerminal::is_terminal(&std::io::stdout()),
-        };
-
-        Options {
-            backup: args.backup,
-            color,
-            files_with_diff: args.files_with_diff,
-            verbose: args.verbose,
-            quiet: args.quiet,
-            emit,
-        }
-    }
-}
-
 /// Formats every requested file, returning a process exit code. In check mode,
 /// a file that needs reformatting yields a failure code.
 pub fn run(args: Args) -> ExitCode {
@@ -94,11 +69,33 @@ pub fn run(args: Args) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let opts = Options::from(&args);
+    let opts = Options {
+        backup: args.backup,
+        color: match args.color {
+            ColorArg::Always => true,
+            ColorArg::Never => false,
+            ColorArg::Auto => std::io::IsTerminal::is_terminal(&std::io::stdout()),
+        },
+        files_with_diff: args.files_with_diff,
+        verbose: args.verbose,
+        quiet: args.quiet,
+        // `--check` overrides `--emit`, mirroring rustfmt.
+        emit: if args.check {
+            Emit::Diff
+        } else {
+            match args.emit {
+                EmitArg::Files => Emit::Files,
+                EmitArg::Stdout => Emit::Stdout,
+            }
+        },
+    };
+
+    // TODO(nl): Support multiple formatters
+    let formatter = PgFormat::new(args.extra_args);
 
     let mut needs_formatting = false;
     for path in &args.files {
-        needs_formatting |= fmt_file(path, &opts);
+        needs_formatting |= fmt_file(&formatter, path, &opts);
     }
 
     if matches!(opts.emit, Emit::Diff) && needs_formatting {
